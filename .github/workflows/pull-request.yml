@@ -1,0 +1,81 @@
+---
+name: pull request
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        description: "The version of the stellar-cli to publish"
+
+jobs:
+  winget:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sync
+      - run: |
+          version=$(echo -n ${{ inputs.version }} | sed 's/v//')
+          echo VERSION=$version >> $GITHUB_ENV
+          echo RELEASE_DATE=$(date '+%Y-%m-%d') >> $GITHUB_ENV
+          echo INSTALLER_URL="https://github.com/stellar/stellar-cli/releases/download/v${version}/stellar-cli-installer-${version}-x86_64-pc-windows-msvc.exe" >> $GITHUB_ENV
+      - run: |
+          mkdir build
+          wget --quiet -O build/installer.exe ${{ env.INSTALLER_URL }}
+          echo DIGEST=$(sha256sum build/installer.exe | cut -d ' ' -f 1 | tr 'a-z' 'A-Z') >> $GITHUB_ENV
+      - run: |
+          set -e
+          echo "installer: ${{ env.INSTALLER_URL }}"
+          echo "version: ${{ env.VERSION }}"
+          echo "release date: ${{ env.RELEASE_DATE }}"
+          echo "digest: ${{ env.DIGEST }}"
+          cp templates/*.yaml build/
+          find build -name '*.yaml' -exec sed -i -e "s/%{version}/${{ env.VERSION }}/g" {} \;
+          find build -name '*.yaml' -exec sed -i -e "s/%{release_date}/${{ env.RELEASE_DATE }}/g" {} \;
+          find build -name '*.yaml' -exec sed -i -e "s/%{digest}/${{ env.DIGEST }}/g" {} \;
+          echo "Done!"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellar.StellarCLI.installer.yaml
+          path: build/Stellar.StellarCLI.installer.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellar.StellarCLI.locale.en-US.yaml
+          path: build/Stellar.StellarCLI.locale.en-US.yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellar.StellarCLI.yaml
+          path: build/Stellar.StellarCLI.yaml
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          path: winget-pkgs
+          fetch-depth: 1
+      - run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          output_dir=winget-pkgs/manifests/s/Stellar/StellarCLI/${{ env.VERSION }}
+          branch_name=Stellar.StellarCLI-${{ env.VERSION }}
+          echo BRANCH_NAME=$branch_name >> $GITHUB_ENV
+          cd winget-pkgs
+          git checkout -b $branch_name
+          mkdir -p $output_dir
+          cp ../build/*.yaml $output_dir
+          git add .
+          git commit -m "Release Stellar.StellarCLI v${{ env.VERSION }}"
+          git push --force origin $branch_name
+      - name: Create Pull Request
+        uses: actions/github-script@v6
+        id: create-pull-request
+        with:
+          script: |
+            const response = await github.rest.pulls.create({
+              title: 'Release Stellar.StellarCLI v${{ env.VERSION }}',
+              owner: 'microsoft',
+              repo: 'winget-pkgs',
+              head: `${context.repo.owner}:${{ env.BRANCH_NAME }}`,
+              base: 'master',
+              maintainer_can_modify: true,
+              body: "Checklist for Pull Requests\n- [x] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?\n- [ ] Is there a linked Issue?\n\nManifests\n- [x] Have you checked that there aren't other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) for the same manifest update/change?\n- [x] This PR only modifies one (1) manifest\n- [ ] Have you [validated](https://github.com/microsoft/winget-pkgs/blob/master/doc/Authoring.md#validation) your manifest locally with `winget validate --manifest <path>`?\n- [ ] Have you tested your manifest locally with `winget install --manifest <path>`?\n- [x] Does your manifest conform to the [1.9 schema](https://github.com/microsoft/winget-pkgs/tree/master/doc/manifest/schema/1.9.0)?\n\nNote: `<path>` is the directory's name containing the manifest you're submitting.\n\n---\n"
+            });
+            return response.data.number;
